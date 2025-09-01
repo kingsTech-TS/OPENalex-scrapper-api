@@ -12,7 +12,7 @@ app = FastAPI(title="OpenAlex Book Scraper API")
 # ✅ Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or specify ["http://localhost:3000", "https://your-frontend.vercel.app"]
+    allow_origins=["*"],  # or specify your frontend origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,21 +45,24 @@ def pick_best_url(work: dict) -> str:
 
 
 def resolve_subject_id(subject: str, session: requests.Session, mailto: str = None):
+    """Resolve subject to an OpenAlex concept or topic ID (prefer concepts)."""
     params = {"search": subject, "per-page": 1}
     if mailto:
         params["mailto"] = mailto
 
-    r = session.get(f"{OPENALEX_BASE}/topics", params=params, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("results"):
-        return "topics.id", data["results"][0]["id"]
-
+    # ✅ Try concepts first (broader)
     r = session.get(f"{OPENALEX_BASE}/concepts", params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
     if data.get("results"):
         return "concepts.id", data["results"][0]["id"]
+
+    # Then fallback to topics (narrower)
+    r = session.get(f"{OPENALEX_BASE}/topics", params=params, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("results"):
+        return "topics.id", data["results"][0]["id"]
 
     return None, None
 
@@ -77,7 +80,7 @@ def request_with_backoff(session, url, params, max_retries=5):
     resp.raise_for_status()
 
 
-def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results=50, mailto=None):
+def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results=50, mailto=None, oa_only=True):
     session = requests.Session()
     session.headers.update({"Accept": "application/json"})
 
@@ -85,8 +88,13 @@ def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results
     if not key:
         return []
 
+    # Build filter
+    filter_parts = [f"type:book", f"{key}:{id_url}", f"publication_year:{start_year}-{end_year}"]
+    if oa_only:
+        filter_parts.append("is_oa:true")
+
     params = {
-        "filter": f"type:book,{key}:{id_url},publication_year:{start_year}-{end_year},is_oa:true",
+        "filter": ",".join(filter_parts),
         "per-page": 50,
     }
     if mailto:
@@ -95,6 +103,7 @@ def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results
     all_rows, page = [], 1
     while len(all_rows) < max_results:
         params["page"] = page
+        print("🔍 Querying:", f"{OPENALEX_BASE}/works", params)  # ✅ Debug query
         resp = request_with_backoff(session, f"{OPENALEX_BASE}/works", params=params)
         results = resp.json().get("results", [])
         if not results:
@@ -103,11 +112,6 @@ def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results
         for work in results:
             # ✅ Only English
             if work.get("language") != "en":
-                continue
-
-            # ✅ Ensure OA flag
-            oa = work.get("open_access", {})
-            if not oa or not oa.get("is_oa", False):
                 continue
 
             # ✅ Require free access URL
@@ -146,14 +150,21 @@ def get_books(
     end_year: int = 2025,
     max_results: int = 50,
     mailto: str = None,
+    oa_only: bool = Query(True, description="Require Open Access (true/false)"),
     format: str = Query("json", description="Output format: json or csv"),
 ):
     subject_list = [s.strip() for s in subjects.split(",") if s.strip()]
     results = []
 
     for subject in subject_list:
-        rows = search_books_by_subject(subject, start_year, end_year, max_results, mailto)
+        rows = search_books_by_subject(subject, start_year, end_year, max_results, mailto, oa_only)
         results.extend(rows)
+
+        # ✅ Fallback: if too few results with OA, retry without OA
+        if oa_only and len(rows) < max_results // 5:
+            print(f"⚠️ Few results for {subject} with OA filter — retrying without OA")
+            rows = search_books_by_subject(subject, start_year, end_year, max_results, mailto, oa_only=False)
+            results.extend(rows)
 
     if not results:
         return JSONResponse(
