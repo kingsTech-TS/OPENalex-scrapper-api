@@ -101,8 +101,13 @@ def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results
             break
 
         for work in results:
+            # ✅ Filter only English books
+            if work.get("language") != "en":
+                continue
+
             title = work.get("display_name") or "N/A"
-            year = work.get("publication_year", "N/A")
+            year = work.get("publication_year")
+            year = int(year) if isinstance(year, int) else 0  # ✅ Ensure integer
             url = pick_best_url(work)
             authors = [
                 (a.get("author") or {}).get("display_name")
@@ -146,6 +151,9 @@ def get_books(
             content={"message": "No results found for given subjects."},
             status_code=404
         )
+
+    # ✅ Sort by Year descending
+    results.sort(key=lambda x: x["Year"], reverse=True)
 
     if format == "csv":
         df = pd.DataFrame(results)
