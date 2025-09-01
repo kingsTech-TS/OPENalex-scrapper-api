@@ -34,10 +34,10 @@ def root():
 
 def pick_best_url(work: dict) -> str:
     pl = work.get("primary_location") or {}
+    if pl.get("pdf_url"):  # Prefer direct PDF link
+        return pl["pdf_url"]
     if pl.get("landing_page_url"):
         return pl["landing_page_url"]
-    if pl.get("pdf_url"):
-        return pl["pdf_url"]
     doi = (work.get("ids") or {}).get("doi")
     if doi:
         return doi
@@ -86,7 +86,7 @@ def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results
         return []
 
     params = {
-        "filter": f"type:book,{key}:{id_url},publication_year:{start_year}-{end_year}",
+        "filter": f"type:book,{key}:{id_url},publication_year:{start_year}-{end_year},is_oa:true",
         "per-page": 50,
     }
     if mailto:
@@ -101,14 +101,23 @@ def search_books_by_subject(subject, start_year=2021, end_year=2025, max_results
             break
 
         for work in results:
-            # ✅ Filter only English books
+            # ✅ Only English
             if work.get("language") != "en":
+                continue
+
+            # ✅ Ensure OA flag
+            oa = work.get("open_access", {})
+            if not oa or not oa.get("is_oa", False):
+                continue
+
+            # ✅ Require free access URL
+            url = pick_best_url(work)
+            if not url:
                 continue
 
             title = work.get("display_name") or "N/A"
             year = work.get("publication_year")
-            year = int(year) if isinstance(year, int) else 0  # ✅ Ensure integer
-            url = pick_best_url(work)
+            year = int(year) if isinstance(year, int) else 0
             authors = [
                 (a.get("author") or {}).get("display_name")
                 for a in work.get("authorships", [])
