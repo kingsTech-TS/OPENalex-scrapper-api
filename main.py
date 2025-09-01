@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import requests
 import pandas as pd
 import io
@@ -7,6 +8,15 @@ import time
 import random
 
 app = FastAPI(title="OpenAlex Book Scraper API")
+
+# ✅ Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or specify ["http://localhost:3000", "https://your-frontend.vercel.app"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 OPENALEX_BASE = "https://api.openalex.org"
 
